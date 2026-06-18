@@ -1,0 +1,218 @@
+---
+import { env } from 'cloudflare:workers';
+import '../styles/global.css';
+import PractitionerCard from '../components/PractitionerCard.astro';
+import BookingForm from '../components/BookingForm.astro';
+import { listPractitionersWithCounts } from '../lib/db/practitioners';
+import { currentLocalDate, currentLocalHHMM } from '../lib/time';
+
+const today = currentLocalDate();
+const hhmm = currentLocalHHMM();
+const bookingsOpen = hhmm >= '08:00';
+
+const practitioners = await listPractitionersWithCounts(
+  env.DB, today, bookingsOpen, hhmm
+);
+const turnstileSiteKey = env.TURNSTILE_SITE_KEY;
+---
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Réservation massages — Congrès MNF 2026</title>
+  </head>
+  <body class="bg-gray-50 min-h-screen">
+    <main class="max-w-lg mx-auto px-4 py-8">
+      <h1 class="text-2xl font-bold text-gray-900 mb-2">
+        Espace bien-être
+      </h1>
+      <p class="text-gray-600 mb-6">
+        Réservez votre créneau de massage.
+      </p>
+
+      {!bookingsOpen && (
+        <div class="mb-6 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
+          Les réservations ouvrent à 08h00.
+        </div>
+      )}
+
+      <!-- Post-booking confirmation (hidden until booking succeeds) -->
+      <div id="booking-confirmation" class="hidden mb-6 bg-green-50 border border-green-200 rounded-lg px-4 py-4 text-center">
+        <p class="text-green-800 font-semibold">Réservation confirmée ✓</p>
+        <p class="text-green-700 text-sm mt-1" id="confirm-details"></p>
+      </div>
+
+      <div class="space-y-3" id="practitioners-list">
+        {practitioners.map(p => (
+          <PractitionerCard
+            id={p.id}
+            name={p.name}
+            specialty={p.specialty}
+            availableSlotCount={p.availableSlotCount}
+            fullyBooked={p.fullyBooked}
+          />
+        ))}
+      </div>
+    </main>
+
+    <BookingForm turnstileSiteKey={turnstileSiteKey} />
+
+    <script>
+      import { startPolling } from '../lib/polling';
+
+      // ── FR9: Restore session if booking token exists in localStorage ─────────
+      const existingToken = localStorage.getItem('bookingToken');
+      if (existingToken) {
+        window.location.replace(`/booking/${existingToken}`);
+      }
+
+      // ── Polling: refresh slot counts every 60s ─────────────────────────────
+      async function refreshPractitioners() {
+        const resp = await fetch('/api/practitioners');
+        if (!resp.ok) return;
+        const { data } = await resp.json() as {
+          data: Array<{ id: string; availableSlotCount: number; fullyBooked: boolean }>;
+          meta: { bookingsOpen: boolean };
+        };
+        data.forEach(p => {
+          const card = document.querySelector(`[data-id="${p.id}"]`);
+          if (!card) return;
+          const countEl = card.querySelector('.slot-count');
+          const bookBtn = card.querySelector('.book-btn');
+          if (countEl) {
+            countEl.textContent = p.fullyBooked
+              ? "Complet aujourd'hui"
+              : `${p.availableSlotCount} créneau${p.availableSlotCount > 1 ? 'x' : ''} disponible${p.availableSlotCount > 1 ? 's' : ''}`;
+          }
+          if (bookBtn) {
+            (bookBtn as HTMLButtonElement).disabled = p.fullyBooked;
+          }
+        });
+      }
+      startPolling(refreshPractitioners, 60_000);
+
+      // ── Booking form: wire "Réserver" buttons ──────────────────────────────
+      document.querySelectorAll('.book-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const practitionerId = (btn as HTMLElement).dataset.practitionerId!;
+          const practitionerName = (btn as HTMLElement).dataset.practitionerName!;
+
+          (document.getElementById('booking-practitioner-id') as HTMLInputElement).value = practitionerId;
+          (document.getElementById('booking-slot-id') as HTMLInputElement).value = '';
+          (document.getElementById('booking-form-title') as HTMLElement).textContent = `Réserver — ${practitionerName}`;
+          (document.getElementById('booking-error') as HTMLElement).classList.add('hidden');
+
+          // Show overlay
+          document.getElementById('booking-overlay')!.classList.remove('hidden');
+          document.body.style.overflow = 'hidden';
+
+          // Fetch available slots
+          const picker = document.getElementById('slot-picker-container')!;
+          picker.innerHTML = '<p class="text-sm text-gray-400 col-span-3">Chargement…</p>';
+
+          try {
+            const resp = await fetch(`/api/slots?practitionerId=${practitionerId}`);
+            const { data: slots } = await resp.json() as { data: Array<{ id: string; start_time: string }> };
+
+            if (slots.length === 0) {
+              picker.innerHTML = '<p class="text-sm text-gray-500 col-span-3">Plus de créneaux disponibles.</p>';
+              return;
+            }
+            picker.innerHTML = slots.map(s =>
+              `<button type="button" class="slot-btn border border-gray-300 rounded px-2 py-2 text-sm hover:bg-blue-50 hover:border-blue-400" data-slot-id="${s.id}">${s.start_time}</button>`
+            ).join('');
+            picker.querySelectorAll('.slot-btn').forEach(b => {
+              b.addEventListener('click', () => {
+                picker.querySelectorAll('.slot-btn').forEach(x => {
+                  x.classList.remove('bg-blue-100', 'border-blue-500');
+                });
+                b.classList.add('bg-blue-100', 'border-blue-500');
+                (document.getElementById('booking-slot-id') as HTMLInputElement).value = (b as HTMLElement).dataset.slotId!;
+              });
+            });
+          } catch {
+            picker.innerHTML = '<p class="text-sm text-red-500 col-span-3">Erreur lors du chargement.</p>';
+          }
+        });
+      });
+
+      // Close overlay
+      function closeOverlay() {
+        document.getElementById('booking-overlay')!.classList.add('hidden');
+        document.body.style.overflow = '';
+      }
+      document.getElementById('booking-close')!.addEventListener('click', closeOverlay);
+      document.getElementById('booking-overlay')!.addEventListener('click', (e) => {
+        if (e.target === document.getElementById('booking-overlay')) closeOverlay();
+      });
+
+      // ── Form submission ────────────────────────────────────────────────────
+      document.getElementById('booking-form')!.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const errorEl = document.getElementById('booking-error')!;
+        errorEl.classList.add('hidden');
+
+        const slotId = (document.getElementById('booking-slot-id') as HTMLInputElement).value;
+        if (!slotId) {
+          errorEl.textContent = 'Veuillez choisir un créneau.';
+          errorEl.classList.remove('hidden');
+          return;
+        }
+
+        const submitBtn = document.getElementById('booking-submit') as HTMLButtonElement;
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Réservation en cours…';
+
+        const turnstileEl = document.querySelector('[name="cf-turnstile-response"]') as HTMLInputElement | null;
+        const honeypotEl = document.querySelector('[name="hp"]') as HTMLInputElement | null;
+        const practitionerName = (document.getElementById('booking-form-title') as HTMLElement)
+          .textContent?.replace('Réserver — ', '') ?? '';
+        const slotTime = (document.querySelector('.slot-btn.bg-blue-100') as HTMLElement)?.textContent ?? '';
+
+        try {
+          const resp = await fetch('/api/bookings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              practitionerId: (document.getElementById('booking-practitioner-id') as HTMLInputElement).value,
+              slotId,
+              name: (document.getElementById('booking-name') as HTMLInputElement).value,
+              phone: (document.getElementById('booking-phone') as HTMLInputElement).value,
+              turnstileToken: turnstileEl?.value ?? '',
+              honeypot: honeypotEl?.value ?? '',
+            }),
+          });
+
+          const json = await resp.json() as {
+            data?: { token: string };
+            error?: { code: string; message: string };
+          };
+
+          if (resp.ok && json.data?.token !== 'fake') {
+            localStorage.setItem('bookingToken', json.data!.token);
+            window.location.replace(`/booking/${json.data!.token}`);
+          } else if (resp.ok) {
+            // Honeypot triggered fake success
+            closeOverlay();
+          } else {
+            const messages: Record<string, string> = {
+              SLOT_TAKEN: 'Ce créneau vient d\'être pris. Veuillez en choisir un autre.',
+              SLOT_PAST: 'Ce créneau est déjà passé. Veuillez en choisir un autre.',
+              BOOKING_EXISTS: 'Vous avez déjà une réservation aujourd\'hui.',
+              TURNSTILE_FAILED: 'Vérification anti-bot échouée. Veuillez réessayer.',
+            };
+            errorEl.textContent = messages[json.error?.code ?? ''] ?? 'Une erreur est survenue.';
+            errorEl.classList.remove('hidden');
+          }
+        } catch {
+          errorEl.textContent = 'Erreur réseau. Veuillez réessayer.';
+          errorEl.classList.remove('hidden');
+        } finally {
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Confirmer la réservation';
+        }
+      });
+    </script>
+  </body>
+</html>

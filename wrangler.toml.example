@@ -1,0 +1,44 @@
+name = "resa-massage"
+account_id = "VOTRE_ACCOUNT_ID"          # wrangler whoami
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+assets = { directory = "dist" }
+
+[[d1_databases]]
+binding = "DB"
+database_name = "resa-massage"
+database_id = "VOTRE_DATABASE_ID"        # wrangler d1 create resa-massage
+
+[vars]
+APP_URL = "https://votre-domaine.example.com"
+
+[[kv_namespaces]]
+binding = "SESSION"
+id = "VOTRE_KV_NAMESPACE_ID"            # wrangler kv namespace create SESSION
+
+[[routes]]
+pattern = "votre-domaine.example.com"
+custom_domain = true
+
+[observability]
+enabled = false
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = false
+persist = true
+head_sampling_rate = 1
+
+# Secrets à configurer via : wrangler secret put NOM_DU_SECRET
+# ADMIN_PASSWORD_HASH
+# ADMIN_SESSION_SECRET
+# TURNSTILE_SITE_KEY
+# TURNSTILE_SECRET_KEY
+# ANDROID_API_SECRET

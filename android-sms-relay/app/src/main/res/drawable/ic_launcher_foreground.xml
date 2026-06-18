@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- SMS bubble -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,26C37.432,26 24,37.864 24,52.5C24,61.04 28.52,68.608 35.6,73.576L33,85L45.6,78.264C48.312,78.936 51.12,79.3 54,79.3C70.568,79.3 84,67.436 84,52.8C84,38.164 70.568,26 54,26Z" />
+</vector>

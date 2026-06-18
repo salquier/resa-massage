@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SMS Relay</string>
+    <string name="service_starting">Démarrage du service…</string>
+    <string name="service_running">Service actif — envoi des SMS en cours</string>
+    <string name="permission_denied">Permission SMS refusée. L\'application ne peut pas envoyer de SMS.</string>
+    <string name="notification_title">SMS Relay actif</string>
+    <string name="notification_text">Envoi des notifications SMS en cours</string>
+</resources>

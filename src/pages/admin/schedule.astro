@@ -1,0 +1,88 @@
+---
+import { env } from 'cloudflare:workers';
+import AdminLayout from '../../layouts/AdminLayout.astro';
+import AdminScheduleGrid from '../../components/AdminScheduleGrid.astro';
+import { requireAdmin } from '../../lib/admin-auth';
+import { getAllSchedules } from '../../lib/db/slots';
+
+const authError = await requireAdmin(Astro.request, env);
+if (authError) return Astro.redirect('/admin/login');
+
+const date = Astro.url.searchParams.get('date') ?? new Date().toISOString().slice(0, 10);
+const schedules = await getAllSchedules(env.DB, date);
+---
+<AdminLayout title="Planning global" active="schedule">
+  <input
+    slot="header-actions"
+    type="date"
+    id="schedule-date"
+    value={date}
+    class="border border-indigo-400 bg-indigo-700 text-white rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-white [color-scheme:dark]"
+  />
+
+  <div id="schedule-grid-container" class="px-4 py-6">
+    <AdminScheduleGrid schedules={schedules} />
+  </div>
+
+  <script>
+    import { startPolling } from '../../lib/polling';
+
+    type SlotData = { id: string; start_time: string; end_time: string; is_booked: boolean; participant_name: string | null };
+    type ScheduleData = { practitionerId: string; fullyBooked: boolean; slots: SlotData[] };
+
+    const dateInput = document.getElementById('schedule-date') as HTMLInputElement;
+    dateInput.addEventListener('change', () => {
+      window.location.href = `/admin/schedule?date=${dateInput.value}`;
+    });
+
+    async function refreshSchedules() {
+      const resp = await fetch(`/api/admin/schedule?date=${dateInput.value}`);
+      if (!resp.ok) return;
+      const { data } = await resp.json() as { data: { schedules: ScheduleData[] } };
+
+      data.schedules.forEach(p => {
+        p.slots.forEach(slot => {
+          const row = document.querySelector(`[data-slot-id="${slot.id}"]`);
+          if (!row) return;
+          const nameEl = row.querySelector('.slot-name');
+          if (nameEl) nameEl.textContent = slot.participant_name ?? 'Disponible';
+        });
+
+        const col = document.querySelector(`[data-practitioner-id="${p.practitionerId}"]`);
+        if (!col) return;
+        col.setAttribute('data-fully-booked', p.fullyBooked ? 'true' : 'false');
+        const badge = col.querySelector('.fully-booked-badge');
+        if (p.fullyBooked && !badge) {
+          const header = col.querySelector('.col-header');
+          if (header) {
+            const span = document.createElement('span');
+            span.className = 'fully-booked-badge text-xs font-semibold text-red-600 bg-red-100 px-2 py-0.5 rounded-full shrink-0';
+            span.textContent = 'Complet';
+            header.appendChild(span);
+          }
+        } else if (!p.fullyBooked && badge) {
+          badge.remove();
+        }
+      });
+    }
+
+    startPolling(refreshSchedules, 60_000);
+
+    // ── Delete slot ───────────────────────────────────────────────────────────
+    document.getElementById('schedule-grid-container')!.addEventListener('click', async (e) => {
+      const btn = (e.target as HTMLElement).closest('.delete-slot-btn') as HTMLElement | null;
+      if (!btn) return;
+      const slotId = btn.dataset.slotId!;
+      if (!confirm('Supprimer ce créneau ?')) return;
+      btn.textContent = '…';
+      const resp = await fetch(`/api/admin/slots/${slotId}`, { method: 'DELETE' });
+      if (resp.ok) {
+        document.querySelector(`[data-slot-id="${slotId}"]`)?.remove();
+      } else {
+        const json = await resp.json() as { error?: { message: string } };
+        alert(json.error?.message ?? 'Erreur lors de la suppression.');
+        btn.textContent = '✕';
+      }
+    });
+  </script>
+</AdminLayout>

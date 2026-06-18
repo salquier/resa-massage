@@ -1,0 +1,145 @@
+---
+import { env } from 'cloudflare:workers';
+import '../../styles/global.css';
+import ScheduleView from '../../components/ScheduleView.astro';
+import NotifyButton from '../../components/NotifyButton.astro';
+import { requirePractitionerToken } from '../../lib/practitioner-auth';
+import { getScheduleWithBookings } from '../../lib/db/slots';
+import { getSmsConfig } from '../../lib/db/sms-config';
+import { currentLocalDate, currentLocalHHMM } from '../../lib/time';
+
+const { token } = Astro.params;
+
+const practitionerOrError = await requirePractitionerToken(token!, env);
+if (practitionerOrError instanceof Response) {
+  return new Response(
+    '<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><title>Accès refusé</title></head><body><p style="font-family:sans-serif;padding:2rem">Lien d\'accès invalide.</p></body></html>',
+    { status: 403, headers: { 'Content-Type': 'text/html' } }
+  );
+}
+const practitioner = practitionerOrError;
+
+const today = currentLocalDate();
+const hhmm = currentLocalHHMM();
+
+const [slots, smsConfig] = await Promise.all([
+  getScheduleWithBookings(env.DB, practitioner.id, today),
+  getSmsConfig(env.DB),
+]);
+
+const remainingCount = slots.filter(s => s.is_booked && s.start_time >= hhmm).length;
+const notifyEnabled = smsConfig.practitioner_trigger_enabled === 1;
+---
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Planning — {practitioner.name}</title>
+  </head>
+  <body class="bg-gray-50 min-h-screen">
+    <header class="bg-white border-b border-gray-200 px-4 py-4">
+      <h1 class="text-lg font-semibold text-gray-900">{practitioner.name}</h1>
+      <p class="text-sm text-gray-500">{practitioner.specialty}</p>
+    </header>
+
+    <main
+      id="schedule-container"
+      class="max-w-lg mx-auto px-4 py-6"
+      data-token={token}
+      data-practitioner-id={practitioner.id}
+      data-notify-enabled={notifyEnabled ? 'true' : 'false'}
+    >
+      <ScheduleView slots={slots} remainingCount={remainingCount} />
+      {notifyEnabled && <NotifyButton />}
+    </main>
+
+    <script>
+      import { startPolling } from '../../lib/polling';
+
+      const container = document.getElementById('schedule-container')!;
+      const token = container.dataset.token!;
+      const notifyEnabled = container.dataset.notifyEnabled === 'true';
+
+      type SlotData = { id: string; start_time: string; end_time: string; is_booked: boolean; participant_name: string | null };
+
+      function toMinutes(hhmm: string): number {
+        const [h, m] = hhmm.split(':').map(Number);
+        return h * 60 + m;
+      }
+
+      function localHHMM(): string {
+        const parts = new Intl.DateTimeFormat('fr-FR', {
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false,
+          timeZone: 'Europe/Paris',
+        }).formatToParts(new Date());
+        const h = parts.find(p => p.type === 'hour')?.value ?? '00';
+        const m = parts.find(p => p.type === 'minute')?.value ?? '00';
+        return `${h.padStart(2, '0')}:${m.padStart(2, '0')}`;
+      }
+
+      function updateNotifyButton(slots: SlotData[]) {
+        const btn = document.getElementById('notify-btn') as HTMLButtonElement | null;
+        if (!btn) return;
+        const current = localHHMM();
+        const currentMinutes = toMinutes(current);
+        const nextBooked = slots
+          .filter(s => s.is_booked && s.start_time >= current)
+          .sort((a, b) => a.start_time.localeCompare(b.start_time))[0];
+        if (nextBooked) {
+          const diff = toMinutes(nextBooked.start_time) - currentMinutes;
+          btn.disabled = diff > 5;
+        } else {
+          btn.disabled = true;
+        }
+      }
+
+      async function refreshSchedule() {
+        const resp = await fetch(`/api/practitioners/${token}/schedule`);
+        if (!resp.ok) return;
+        const { data } = await resp.json() as {
+          data: { slots: SlotData[]; remainingCount: number };
+        };
+
+        const countEl = document.getElementById('remaining-count');
+        if (countEl) countEl.textContent = String(data.remainingCount);
+
+        data.slots.forEach(slot => {
+          const row = document.querySelector(`[data-slot-id="${slot.id}"]`);
+          if (!row) return;
+          const nameEl = row.querySelector('.slot-name');
+          if (nameEl) nameEl.textContent = slot.participant_name ?? 'Disponible';
+        });
+
+        if (notifyEnabled) updateNotifyButton(data.slots);
+      }
+
+      startPolling(refreshSchedule, 60_000);
+
+      const notifyBtn = document.getElementById('notify-btn') as HTMLButtonElement | null;
+      const notifyStatus = document.getElementById('notify-status');
+
+      notifyBtn?.addEventListener('click', async () => {
+        if (!notifyBtn) return;
+        notifyBtn.disabled = true;
+        const resp = await fetch(`/api/practitioners/${token}/notify`, { method: 'POST' });
+        if (resp.ok) {
+          notifyBtn.textContent = 'Notification envoyée ✓';
+          if (notifyStatus) { notifyStatus.textContent = ''; notifyStatus.classList.add('hidden'); }
+          setTimeout(() => {
+            if (notifyBtn) notifyBtn.textContent = 'Notifier le prochain participant';
+          }, 30_000);
+        } else {
+          const body = await resp.json() as { error?: { message?: string } };
+          if (notifyStatus) {
+            notifyStatus.textContent = body.error?.message ?? 'Une erreur est survenue';
+            notifyStatus.classList.remove('hidden');
+          }
+          notifyBtn.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>

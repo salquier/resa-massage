@@ -1,0 +1,44 @@
+# Build output
+dist/
+
+# Generated types
+.astro/
+
+# Dependencies
+node_modules/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment variables — NEVER commit actual secrets
+.env
+.env.production
+.dev.vars
+local.properties
+
+# Wrangler config
+wrangler.toml
+
+# Wrangler local state
+.wrangler/
+
+# macOS
+.DS_Store
+
+# Android build cache
+android-sms-relay/.gradle/
+android-sms-relay/app/build/
+android-sms-relay/build/
+*.apk
+
+# Editor
+.vscode/settings.json
+.idea/
+
+# IA
+.claude/
+_bmad/
+_bmad-output/

@@ -1,0 +1,133 @@
+---
+import { env } from 'cloudflare:workers';
+import '../../styles/global.css';
+import { getBookingByToken, getBookingWithDetails } from '../../lib/db/bookings';
+
+const { token } = Astro.params;
+const booking = token ? await getBookingByToken(env.DB, token) : null;
+
+if (!booking) {
+  // Stale token — render a clearing page to prevent redirect loop with index.astro
+}
+
+const details = booking ? await getBookingWithDetails(env.DB, booking.id) : null;
+
+// Format date DD/MM/YYYY
+let displayDate = '';
+if (details) {
+  const [y, m, d] = details.slot_date.split('-');
+  displayDate = `${d}/${m}/${y}`;
+}
+---
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ma réservation</title>
+  </head>
+  <body class="bg-gray-50 min-h-screen">
+    {!booking ? (
+      <!-- Stale/invalid token: clear localStorage and redirect to home -->
+      <script is:inline>
+        localStorage.removeItem('bookingToken');
+        window.location.replace('/');
+      </script>
+    ) : (
+      <main class="max-w-lg mx-auto px-4 py-8">
+        <a href="/" class="text-sm text-blue-600 hover:underline mb-6 block">← Retour</a>
+
+        <div
+          id="booking-container"
+          class="bg-white rounded-lg border border-gray-200 p-6 space-y-4"
+          data-booking-id={booking.id}
+          data-token={token}
+        >
+          <h1 class="text-xl font-bold text-gray-900">Votre réservation</h1>
+
+          <div class="space-y-2">
+            <div class="flex justify-between text-sm">
+              <span class="text-gray-500">Praticien·ne</span>
+              <span class="font-medium text-gray-900">{details?.practitioner_name}</span>
+            </div>
+            <div class="flex justify-between text-sm">
+              <span class="text-gray-500">Spécialité</span>
+              <span class="text-gray-700">{details?.specialty}</span>
+            </div>
+            <div class="flex justify-between text-sm">
+              <span class="text-gray-500">Date</span>
+              <span class="text-gray-700">{displayDate}</span>
+            </div>
+            <div class="flex justify-between text-sm">
+              <span class="text-gray-500">Créneau</span>
+              <span class="font-medium text-gray-900">{details?.slot_start_time} – {details?.slot_end_time}</span>
+            </div>
+          </div>
+
+          <hr class="border-gray-100" />
+
+          <p id="cancel-error" class="text-sm text-red-600 hidden"></p>
+
+          <button
+            id="cancel-btn"
+            class="w-full border border-red-300 text-red-600 text-sm py-2 rounded hover:bg-red-50"
+          >
+            Annuler ma réservation
+          </button>
+        </div>
+      </main>
+    )}
+
+    {booking && (
+      <script>
+        import { startPolling } from '../../lib/polling';
+
+        const container = document.getElementById('booking-container')!;
+        const bookingId = container.dataset.bookingId!;
+        const bookingToken = localStorage.getItem('bookingToken') ?? container.dataset.token!;
+
+        async function refreshBooking() {
+          const resp = await fetch(`/api/bookings/${bookingId}`, {
+            headers: { 'Authorization': `Bearer ${bookingToken}` },
+          });
+          if (resp.status === 404 || resp.status === 403) {
+            localStorage.removeItem('bookingToken');
+            window.location.replace('/');
+          }
+        }
+        startPolling(refreshBooking, 60_000);
+
+        document.getElementById('cancel-btn')!.addEventListener('click', async () => {
+          if (!confirm('Annuler votre réservation ?')) return;
+
+          const btn = document.getElementById('cancel-btn') as HTMLButtonElement;
+          const errorEl = document.getElementById('cancel-error')!;
+          btn.disabled = true;
+          btn.textContent = 'Annulation en cours…';
+          errorEl.classList.add('hidden');
+
+          try {
+            const resp = await fetch(`/api/bookings/${bookingId}`, {
+              method: 'DELETE',
+              headers: { 'Authorization': `Bearer ${bookingToken}` },
+            });
+            if (resp.ok) {
+              localStorage.removeItem('bookingToken');
+              window.location.replace('/');
+            } else {
+              errorEl.textContent = 'Erreur lors de l\'annulation. Veuillez réessayer.';
+              errorEl.classList.remove('hidden');
+              btn.disabled = false;
+              btn.textContent = 'Annuler ma réservation';
+            }
+          } catch {
+            errorEl.textContent = 'Erreur réseau. Veuillez réessayer.';
+            errorEl.classList.remove('hidden');
+            btn.disabled = false;
+            btn.textContent = 'Annuler ma réservation';
+          }
+        });
+      </script>
+    )}
+  </body>
+</html>

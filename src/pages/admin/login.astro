@@ -1,0 +1,83 @@
+---
+import { env } from 'cloudflare:workers';
+import '../../styles/global.css';
+import { verifyCookie } from '../../lib/admin-auth';
+
+const cookieHeader = Astro.request.headers.get('Cookie') ?? '';
+const match = cookieHeader.match(/(?:^|;\s*)admin_session=([^;]+)/);
+const cookieValue = match?.[1] ?? '';
+if (cookieValue && await verifyCookie(cookieValue, env.ADMIN_SESSION_SECRET)) {
+  return Astro.redirect('/admin');
+}
+
+const turnstileSiteKey = env.TURNSTILE_SITE_KEY ?? '';
+---
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Administration — Connexion</title>
+    {turnstileSiteKey && (
+      <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+    )}
+  </head>
+  <body class="min-h-screen bg-indigo-600 flex items-center justify-center px-4">
+    <div class="w-full max-w-sm">
+      <div class="text-center mb-8">
+        <h1 class="text-2xl font-bold text-white">Administration</h1>
+        <p class="text-indigo-200 text-sm mt-1">Espace réservé aux organisateurs</p>
+      </div>
+      <div class="bg-white rounded-2xl shadow-xl p-8">
+        <form id="login-form" novalidate>
+          <label class="block text-sm font-medium text-gray-700 mb-1.5" for="password">
+            Mot de passe
+          </label>
+          <input
+            id="password"
+            type="password"
+            autocomplete="current-password"
+            required
+            class="w-full border border-gray-300 rounded-xl px-4 py-3 mb-4 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          />
+          {turnstileSiteKey && (
+            <div class="cf-turnstile mb-4" data-sitekey={turnstileSiteKey}></div>
+          )}
+          <p id="error-msg" class="text-red-600 text-sm mb-3 hidden">
+            Mot de passe incorrect ou vérification échouée.
+          </p>
+          <button
+            type="submit"
+            class="w-full bg-indigo-600 text-white py-3 rounded-xl hover:bg-indigo-700 font-semibold text-sm transition-colors"
+          >
+            Se connecter
+          </button>
+        </form>
+      </div>
+    </div>
+    <script>
+      const form = document.getElementById('login-form') as HTMLFormElement;
+      const errorMsg = document.getElementById('error-msg') as HTMLParagraphElement;
+      const passwordInput = document.getElementById('password') as HTMLInputElement;
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        errorMsg.classList.add('hidden');
+        const turnstileEl = document.querySelector('[name="cf-turnstile-response"]') as HTMLInputElement | null;
+        const resp = await fetch('/api/admin/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            password: passwordInput.value,
+            turnstileToken: turnstileEl?.value ?? '',
+          }),
+        });
+        if (resp.ok) {
+          window.location.href = '/admin';
+        } else {
+          errorMsg.classList.remove('hidden');
+        }
+      });
+    </script>
+  </body>
+</html>

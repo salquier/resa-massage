@@ -1,0 +1,10 @@
+# Copy this file to local.properties (git-ignored) and fill in your values.
+# These are injected as BuildConfig fields at compile time.
+
+# Base URL of the deployed Cloudflare Worker (no trailing slash)
+# Example: https://resa-massage.example.workers.dev
+SERVER_URL=
+
+# Shared secret matching ANDROID_API_SECRET in your Cloudflare Worker secrets
+# Must match the value set via: wrangler secret put ANDROID_API_SECRET
+API_SECRET=

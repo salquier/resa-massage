@@ -1,0 +1,292 @@
+---
+import { env } from 'cloudflare:workers';
+import AdminLayout from '../../layouts/AdminLayout.astro';
+import { requireAdmin } from '../../lib/admin-auth';
+
+const authError = await requireAdmin(Astro.request, env);
+if (authError) return Astro.redirect('/admin/login');
+---
+<AdminLayout title="Réservations" active="bookings">
+  <div class="max-w-4xl mx-auto px-4 py-6 space-y-5">
+
+    <!-- Search form -->
+    <section class="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+      <form id="search-form" class="flex gap-3">
+        <input
+          id="search-input"
+          type="text"
+          placeholder="Nom ou téléphone…"
+          class="flex-1 border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          autocomplete="off"
+        />
+        <button
+          type="submit"
+          class="bg-indigo-600 text-white text-sm px-5 py-2.5 rounded-lg hover:bg-indigo-700 font-medium transition-colors shrink-0"
+        >
+          Rechercher
+        </button>
+      </form>
+    </section>
+
+    <!-- Results -->
+    <section id="results-section" class="hidden">
+      <p id="no-results" class="text-sm text-gray-400 hidden">Aucun résultat.</p>
+      <div id="results-list" class="space-y-3"></div>
+    </section>
+
+    <!-- Move modal -->
+    <div id="move-modal" class="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 hidden">
+      <div class="bg-white rounded-t-2xl sm:rounded-xl shadow-xl p-6 w-full sm:max-w-md sm:mx-4 space-y-4">
+        <h2 class="text-base font-semibold text-gray-900">Déplacer la réservation</h2>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1.5">Praticien·ne</label>
+          <select id="move-practitioner-select" class="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"></select>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1.5">Créneau disponible</label>
+          <select id="move-slot-select" class="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            <option value="">Sélectionnez d'abord un praticien·ne</option>
+          </select>
+        </div>
+        <p id="move-error" class="text-sm text-red-600 hidden"></p>
+        <div class="flex gap-3">
+          <button id="move-cancel-btn" class="flex-1 text-sm text-gray-600 hover:text-gray-900 border border-gray-300 rounded-lg py-2.5 font-medium transition-colors">
+            Annuler
+          </button>
+          <button id="move-confirm-btn" class="flex-1 bg-indigo-600 text-white text-sm rounded-lg py-2.5 hover:bg-indigo-700 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+            Déplacer
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    type Booking = {
+      id: string;
+      participantName: string;
+      phone: string | null;
+      practitionerName: string;
+      slotStartTime: string;
+      slotDate: string;
+    };
+
+    type SlotData = { id: string; start_time: string; end_time: string; is_booked: boolean; participant_name: string | null };
+    type ScheduleData = { practitionerId: string; practitionerName: string; slots: SlotData[] };
+
+    let currentResults: Booking[] = [];
+    let allSchedules: ScheduleData[] = [];
+    let moveBookingId = '';
+
+    const searchForm = document.getElementById('search-form') as HTMLFormElement;
+    const searchInput = document.getElementById('search-input') as HTMLInputElement;
+    const resultsSection = document.getElementById('results-section')!;
+    const noResults = document.getElementById('no-results')!;
+    const resultsList = document.getElementById('results-list')!;
+
+    searchForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const q = searchInput.value.trim();
+      if (!q) return;
+      const resp = await fetch(`/api/admin/bookings?q=${encodeURIComponent(q)}`);
+      if (!resp.ok) return;
+      const { data } = await resp.json() as { data: Booking[] };
+      currentResults = data;
+      renderResults(data);
+    });
+
+    function renderResults(bookings: Booking[]) {
+      resultsSection.classList.remove('hidden');
+      resultsList.innerHTML = '';
+
+      if (bookings.length === 0) {
+        noResults.classList.remove('hidden');
+        return;
+      }
+      noResults.classList.add('hidden');
+
+      bookings.forEach(b => {
+        const card = document.createElement('div');
+        card.className = 'booking-card bg-white rounded-xl border border-gray-200 p-4 shadow-sm space-y-3';
+        card.dataset.bookingId = b.id;
+        card.innerHTML = `
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <p class="text-sm font-semibold text-gray-900">${escHtml(b.participantName)}</p>
+              <p class="text-xs text-gray-500 mt-0.5">${escHtml(b.practitionerName)} · ${escHtml(b.slotDate)} ${escHtml(b.slotStartTime)}</p>
+            </div>
+            <div class="flex gap-2 shrink-0">
+              <button data-action="move" data-booking-id="${b.id}"
+                class="text-xs font-medium text-indigo-600 hover:text-indigo-800 border border-indigo-200 rounded-lg px-3 py-1.5 transition-colors">
+                Déplacer
+              </button>
+              <button data-action="delete" data-booking-id="${b.id}" data-name="${escHtml(b.participantName)}"
+                class="text-xs font-medium text-red-600 hover:text-red-800 border border-red-200 rounded-lg px-3 py-1.5 transition-colors">
+                Supprimer
+              </button>
+            </div>
+          </div>
+          <div class="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2">
+            <span class="text-xs text-gray-500 shrink-0">Tél :</span>
+            <span class="phone-display text-xs text-gray-800 font-mono flex-1">${b.phone ? escHtml(b.phone) : '—'}</span>
+            ${b.phone !== null ? `
+              <button data-action="edit-phone" data-booking-id="${b.id}"
+                class="text-xs text-indigo-600 hover:text-indigo-800 font-medium shrink-0 transition-colors">
+                Corriger
+              </button>
+            ` : ''}
+          </div>
+          <div class="phone-edit-form hidden">
+            <div class="flex gap-2 items-center">
+              <input type="tel" class="phone-input border border-gray-300 rounded-lg px-3 py-2 text-sm flex-1 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                value="${b.phone ? escHtml(b.phone) : ''}" placeholder="+33…" />
+              <button data-action="save-phone" data-booking-id="${b.id}"
+                class="bg-indigo-600 text-white text-xs px-3 py-2 rounded-lg font-medium hover:bg-indigo-700 transition-colors shrink-0">
+                Enregistrer
+              </button>
+              <button data-action="cancel-phone"
+                class="text-xs text-gray-500 hover:text-gray-700 shrink-0 transition-colors">
+                Annuler
+              </button>
+            </div>
+            <p class="phone-save-error text-xs text-red-600 mt-1.5 hidden"></p>
+          </div>
+        `;
+        resultsList.appendChild(card);
+      });
+    }
+
+    function escHtml(s: string): string {
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    resultsList.addEventListener('click', async (e) => {
+      const target = e.target as HTMLElement;
+      const btn = target.closest('[data-action]') as HTMLElement | null;
+      if (!btn) return;
+      const action = btn.dataset.action!;
+      const bookingId = btn.dataset.bookingId!;
+      const card = btn.closest('.booking-card') as HTMLElement;
+
+      if (action === 'edit-phone') {
+        card.querySelector('.phone-edit-form')!.classList.remove('hidden');
+        card.querySelector<HTMLElement>('[data-action="edit-phone"]')!.classList.add('hidden');
+      }
+
+      if (action === 'cancel-phone') {
+        card.querySelector('.phone-edit-form')!.classList.add('hidden');
+        card.querySelector<HTMLElement>('[data-action="edit-phone"]')?.classList.remove('hidden');
+      }
+
+      if (action === 'save-phone') {
+        const input = card.querySelector<HTMLInputElement>('.phone-input')!;
+        const phone = input.value.trim();
+        const errorEl = card.querySelector<HTMLElement>('.phone-save-error')!;
+        if (!phone) { errorEl.textContent = 'Téléphone requis'; errorEl.classList.remove('hidden'); return; }
+        const resp = await fetch(`/api/admin/bookings/${bookingId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone }),
+        });
+        if (resp.ok) {
+          card.querySelector('.phone-display')!.textContent = phone;
+          card.querySelector('.phone-edit-form')!.classList.add('hidden');
+          card.querySelector<HTMLElement>('[data-action="edit-phone"]')?.classList.remove('hidden');
+          errorEl.classList.add('hidden');
+          const b = currentResults.find(x => x.id === bookingId);
+          if (b) b.phone = phone;
+        } else {
+          errorEl.textContent = 'Erreur lors de la sauvegarde.';
+          errorEl.classList.remove('hidden');
+        }
+      }
+
+      if (action === 'delete') {
+        const name = btn.dataset.name ?? 'ce participant';
+        if (!confirm(`Supprimer la réservation de ${name} ? Cette action est irréversible.`)) return;
+        const resp = await fetch(`/api/admin/bookings/${bookingId}`, { method: 'DELETE' });
+        if (resp.ok) {
+          card.remove();
+          currentResults = currentResults.filter(x => x.id !== bookingId);
+          if (currentResults.length === 0) noResults.classList.remove('hidden');
+        } else {
+          alert('Erreur lors de la suppression.');
+        }
+      }
+
+      if (action === 'move') {
+        moveBookingId = bookingId;
+        await openMoveModal();
+      }
+    });
+
+    const moveModal = document.getElementById('move-modal')!;
+    const movePractSelect = document.getElementById('move-practitioner-select') as unknown as HTMLSelectElement;
+    const moveSlotSelect = document.getElementById('move-slot-select') as unknown as HTMLSelectElement;
+    const moveError = document.getElementById('move-error')!;
+    const moveCancelBtn = document.getElementById('move-cancel-btn')!;
+    const moveConfirmBtn = document.getElementById('move-confirm-btn') as HTMLButtonElement;
+
+    async function openMoveModal() {
+      moveError.classList.add('hidden');
+      moveConfirmBtn.disabled = true;
+      movePractSelect.innerHTML = '<option value="">Chargement…</option>';
+      moveSlotSelect.innerHTML = '<option value="">Sélectionnez d\'abord un praticien·ne</option>';
+      moveModal.classList.remove('hidden');
+
+      if (allSchedules.length === 0) {
+        const resp = await fetch('/api/admin/schedule');
+        if (resp.ok) {
+          const { data } = await resp.json() as { data: { schedules: ScheduleData[] } };
+          allSchedules = data.schedules;
+        }
+      }
+
+      movePractSelect.innerHTML = allSchedules
+        .map(p => `<option value="${escHtml(p.practitionerId)}">${escHtml(p.practitionerName)}</option>`)
+        .join('');
+      updateSlotOptions();
+    }
+
+    function updateSlotOptions() {
+      const practId = movePractSelect.value;
+      const sched = allSchedules.find(p => p.practitionerId === practId);
+      const available = sched?.slots.filter(s => !s.is_booked) ?? [];
+      if (available.length === 0) {
+        moveSlotSelect.innerHTML = '<option value="">Aucun créneau disponible</option>';
+        moveConfirmBtn.disabled = true;
+      } else {
+        moveSlotSelect.innerHTML = available
+          .map(s => `<option value="${escHtml(s.id)}">${escHtml(s.start_time)}–${escHtml(s.end_time)}</option>`)
+          .join('');
+        moveConfirmBtn.disabled = false;
+      }
+    }
+
+    movePractSelect.addEventListener('change', updateSlotOptions);
+    moveCancelBtn.addEventListener('click', () => { moveModal.classList.add('hidden'); moveBookingId = ''; });
+
+    moveConfirmBtn.addEventListener('click', async () => {
+      const slotId = moveSlotSelect.value;
+      const practitionerId = movePractSelect.value;
+      if (!slotId || !moveBookingId) return;
+      moveConfirmBtn.disabled = true;
+      const resp = await fetch(`/api/admin/bookings/${moveBookingId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slotId, practitionerId }),
+      });
+      if (resp.ok) {
+        moveModal.classList.add('hidden');
+        allSchedules = [];
+        searchForm.dispatchEvent(new Event('submit'));
+      } else {
+        const body = await resp.json() as { error?: { message?: string } };
+        moveError.textContent = body.error?.message ?? 'Erreur lors du déplacement.';
+        moveError.classList.remove('hidden');
+        moveConfirmBtn.disabled = false;
+      }
+    });
+  </script>
+</AdminLayout>

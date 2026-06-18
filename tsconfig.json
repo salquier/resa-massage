@@ -1,0 +1,11 @@
+{
+  "extends": "astro/tsconfigs/strict",
+  "compilerOptions": {
+    "strictNullChecks": true,
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "types": ["@cloudflare/workers-types/2023-07-01"],
+    "moduleResolution": "bundler"
+  },
+  "include": ["src/**/*", "worker-configuration.d.ts"]
+}

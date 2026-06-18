@@ -1,0 +1,50 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    name: Build and Deploy
+    steps:
+      - name: Check required secrets
+        run: |
+          missing=()
+          [ -z "$CLOUDFLARE_API_TOKEN" ] && missing+=("CLOUDFLARE_API_TOKEN")
+          [ -z "$WRANGLER_TOML" ]        && missing+=("WRANGLER_TOML")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Secrets manquants : ${missing[*]}"
+            echo "Configurez-les dans Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          WRANGLER_TOML: ${{ secrets.WRANGLER_TOML }}
+
+      - uses: actions/checkout@v4
+
+      - name: Generate wrangler.toml
+        run: echo "$WRANGLER_TOML" > wrangler.toml
+        env:
+          WRANGLER_TOML: ${{ secrets.WRANGLER_TOML }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check and lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Deploy to Cloudflare Workers
+        run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

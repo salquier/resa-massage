@@ -1,0 +1,317 @@
+---
+import { env } from 'cloudflare:workers';
+import AdminLayout from '../../layouts/AdminLayout.astro';
+import { requireAdmin } from '../../lib/admin-auth';
+import { listPractitioners } from '../../lib/db/practitioners';
+
+const authError = await requireAdmin(Astro.request, env);
+if (authError) return Astro.redirect('/admin/login');
+
+const practitioners = await listPractitioners(env.DB);
+---
+<AdminLayout title="Praticien·nes" active="practitioners">
+  <div class="max-w-4xl mx-auto px-4 py-6 space-y-6">
+
+    <!-- Add practitioner form -->
+    <section class="bg-white rounded-xl border border-gray-200 p-5 shadow-sm">
+      <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-4">Ajouter un·e praticien·ne</h2>
+      <form id="create-form" class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <input
+          type="text"
+          name="name"
+          placeholder="Nom"
+          required
+          class="border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        />
+        <input
+          type="text"
+          name="specialty"
+          placeholder="Spécialité"
+          required
+          class="border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        />
+        <input
+          type="number"
+          name="slot_duration_minutes"
+          placeholder="Durée créneau (min)"
+          min="5"
+          required
+          class="border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        />
+        <button
+          type="submit"
+          class="sm:col-span-3 bg-indigo-600 text-white py-2.5 rounded-lg hover:bg-indigo-700 text-sm font-semibold transition-colors"
+        >
+          Ajouter
+        </button>
+      </form>
+      <div id="create-result" class="mt-3 hidden">
+        <p class="text-sm text-emerald-700 font-medium">Praticien·ne créé·e. URL d'accès :</p>
+        <code id="access-url" class="block mt-1 text-sm bg-gray-100 rounded-lg px-3 py-2 break-all text-gray-800"></code>
+      </div>
+      <p id="create-error" class="mt-3 text-sm text-red-600 hidden"></p>
+    </section>
+
+    <!-- Practitioners list -->
+    <section>
+      <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
+        Liste ({practitioners.length})
+      </h2>
+      {practitioners.length === 0 ? (
+        <p class="text-sm text-gray-500">Aucun·e praticien·ne pour l'instant.</p>
+      ) : (
+        <div class="space-y-3">
+          {practitioners.map((p) => (
+            <div class="practitioner-card bg-white rounded-xl border border-gray-200 p-4 shadow-sm" data-id={p.id}>
+              <div class="flex items-start justify-between gap-4">
+                <div class="flex-1 min-w-0">
+                  <!-- View mode -->
+                  <div class="view-mode">
+                    <p class="font-semibold text-gray-900">{p.name}</p>
+                    <p class="text-sm text-gray-500">{p.specialty} · {p.slot_duration_minutes} min</p>
+                    <a
+                      href={`/practitioner/${p.token}`}
+                      class="text-xs text-indigo-600 hover:underline break-all"
+                      target="_blank"
+                    >
+                      /practitioner/{p.token}
+                    </a>
+                  </div>
+                  <!-- Edit mode -->
+                  <div class="edit-mode hidden">
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-1">
+                      <input
+                        type="text"
+                        class="edit-name border border-gray-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        value={p.name}
+                      />
+                      <input
+                        type="text"
+                        class="edit-specialty border border-gray-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        value={p.specialty}
+                      />
+                      <input
+                        type="number"
+                        class="edit-duration border border-gray-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        value={p.slot_duration_minutes}
+                        min="5"
+                      />
+                    </div>
+                    <div class="flex gap-2 mt-3">
+                      <button class="save-btn text-sm bg-emerald-600 text-white px-4 py-1.5 rounded-lg hover:bg-emerald-700 font-medium transition-colors">
+                        Enregistrer
+                      </button>
+                      <button class="cancel-btn text-sm text-gray-500 hover:text-gray-700 px-3 py-1.5">
+                        Annuler
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div class="flex gap-2 shrink-0">
+                  <button class="edit-btn text-xs font-medium text-indigo-600 hover:text-indigo-800 border border-indigo-200 rounded-lg px-3 py-1.5 transition-colors">
+                    Modifier
+                  </button>
+                  <button class="delete-btn text-xs font-medium text-red-600 hover:text-red-800 border border-red-200 rounded-lg px-3 py-1.5 transition-colors" data-name={p.name}>
+                    Supprimer
+                  </button>
+                </div>
+              </div>
+              <p class="error-msg text-xs text-red-600 mt-2 hidden"></p>
+
+              <!-- Availability section -->
+              <div class="avail-section mt-4 border-t border-gray-100 pt-3">
+                <button class="avail-toggle flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-indigo-600 transition-colors mb-2">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3.5 h-3.5 avail-arrow transition-transform"><path fill-rule="evenodd" d="M8.22 5.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L11.94 10 8.22 6.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd"/></svg>
+                  Configurer les disponibilités
+                </button>
+                <div class="avail-form hidden">
+                  <div class="flex items-center gap-2 mb-3">
+                    <label class="text-xs text-gray-600 shrink-0 font-medium">Date :</label>
+                    <input
+                      type="date"
+                      class="avail-date border border-gray-300 rounded-lg px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      value={new Date().toISOString().slice(0, 10)}
+                    />
+                  </div>
+                  <div class="avail-windows space-y-2 mb-3"></div>
+                  <div class="flex items-center gap-3">
+                    <button class="win-add text-xs font-medium text-indigo-600 hover:text-indigo-800 transition-colors">
+                      + Ajouter une plage
+                    </button>
+                    <button class="avail-save text-xs bg-emerald-600 text-white px-4 py-1.5 rounded-lg hover:bg-emerald-700 font-medium transition-colors">
+                      Enregistrer
+                    </button>
+                  </div>
+                  <p class="avail-result text-xs text-emerald-700 font-medium mt-2 hidden"></p>
+                  <p class="avail-error text-xs text-red-600 mt-2 hidden"></p>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  </div>
+
+  <script>
+    // ─── Create ──────────────────────────────────────────────────────────────
+    const createForm = document.getElementById('create-form') as HTMLFormElement;
+    const createResult = document.getElementById('create-result') as HTMLDivElement;
+    const accessUrlEl = document.getElementById('access-url') as HTMLElement;
+    const createError = document.getElementById('create-error') as HTMLParagraphElement;
+
+    createForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      createResult.classList.add('hidden');
+      createError.classList.add('hidden');
+      const data = new FormData(createForm);
+      const resp = await fetch('/api/admin/practitioners', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: data.get('name'),
+          specialty: data.get('specialty'),
+          slot_duration_minutes: Number(data.get('slot_duration_minutes')),
+        }),
+      });
+      const json = await resp.json() as { data?: { accessUrl: string }; error?: { message: string } };
+      if (resp.ok && json.data) {
+        accessUrlEl.textContent = window.location.origin + json.data.accessUrl;
+        createResult.classList.remove('hidden');
+        createForm.reset();
+        setTimeout(() => window.location.reload(), 3000);
+      } else {
+        createError.textContent = json.error?.message ?? 'Erreur lors de la création.';
+        createError.classList.remove('hidden');
+      }
+    });
+
+    // ─── Per-card wiring ──────────────────────────────────────────────────────
+    document.querySelectorAll<HTMLDivElement>('.practitioner-card').forEach((card) => {
+      const id = card.dataset.id!;
+      const viewMode = card.querySelector('.view-mode') as HTMLDivElement;
+      const editMode = card.querySelector('.edit-mode') as HTMLDivElement;
+      const errorMsg = card.querySelector('.error-msg') as HTMLParagraphElement;
+      const editBtn = card.querySelector('.edit-btn') as HTMLButtonElement;
+      const cancelBtn = card.querySelector('.cancel-btn') as HTMLButtonElement;
+      const saveBtn = card.querySelector('.save-btn') as HTMLButtonElement;
+      const deleteBtn = card.querySelector('.delete-btn') as HTMLButtonElement;
+
+      editBtn.addEventListener('click', () => {
+        viewMode.classList.add('hidden');
+        editMode.classList.remove('hidden');
+      });
+
+      cancelBtn.addEventListener('click', () => {
+        editMode.classList.add('hidden');
+        viewMode.classList.remove('hidden');
+        errorMsg.classList.add('hidden');
+      });
+
+      saveBtn.addEventListener('click', async () => {
+        errorMsg.classList.add('hidden');
+        const name = (card.querySelector('.edit-name') as HTMLInputElement).value;
+        const specialty = (card.querySelector('.edit-specialty') as HTMLInputElement).value;
+        const slot_duration_minutes = Number((card.querySelector('.edit-duration') as HTMLInputElement).value);
+        const resp = await fetch(`/api/admin/practitioners/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, specialty, slot_duration_minutes }),
+        });
+        if (resp.ok) {
+          window.location.reload();
+        } else {
+          const json = await resp.json() as { error?: { message: string } };
+          errorMsg.textContent = json.error?.message ?? 'Erreur lors de la mise à jour.';
+          errorMsg.classList.remove('hidden');
+        }
+      });
+
+      deleteBtn.addEventListener('click', async () => {
+        const name = deleteBtn.dataset.name ?? 'ce·tte praticien·ne';
+        if (!confirm(`Supprimer ${name} ?`)) return;
+        errorMsg.classList.add('hidden');
+        const resp = await fetch(`/api/admin/practitioners/${id}`, { method: 'DELETE' });
+        if (resp.ok) {
+          card.remove();
+        } else {
+          const json = await resp.json() as { error?: { code: string; message: string } };
+          errorMsg.textContent = json.error?.code === 'PRACTITIONER_HAS_BOOKINGS'
+            ? 'Impossible : des réservations existent pour ce·tte praticien·ne.'
+            : (json.error?.message ?? 'Erreur lors de la suppression.');
+          errorMsg.classList.remove('hidden');
+        }
+      });
+
+      // ─── Availability ─────────────────────────────────────────────────────
+      const availSection = card.querySelector('.avail-section') as HTMLDivElement;
+      const availToggle = availSection.querySelector('.avail-toggle') as HTMLButtonElement;
+      const availArrow = availToggle.querySelector('.avail-arrow') as SVGElement;
+      const availForm = availSection.querySelector('.avail-form') as HTMLDivElement;
+      const availDate = availSection.querySelector('.avail-date') as HTMLInputElement;
+      const availWindows = availSection.querySelector('.avail-windows') as HTMLDivElement;
+      const winAdd = availSection.querySelector('.win-add') as HTMLButtonElement;
+      const availSave = availSection.querySelector('.avail-save') as HTMLButtonElement;
+      const availResult = availSection.querySelector('.avail-result') as HTMLParagraphElement;
+      const availError = availSection.querySelector('.avail-error') as HTMLParagraphElement;
+
+      function addWindowRow(start = '09:00', end = '17:00') {
+        const row = document.createElement('div');
+        row.className = 'window-row flex items-center gap-2';
+        row.innerHTML = `
+          <input type="time" class="win-start border border-gray-300 rounded-lg px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" value="${start}" />
+          <span class="text-xs text-gray-400">–</span>
+          <input type="time" class="win-end border border-gray-300 rounded-lg px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500" value="${end}" />
+          <button class="win-remove text-red-400 hover:text-red-600 transition-colors text-xs px-1">✕</button>
+        `;
+        row.querySelector('.win-remove')!.addEventListener('click', () => row.remove());
+        availWindows.appendChild(row);
+      }
+
+      async function loadAvailability(date: string) {
+        availResult.classList.add('hidden');
+        availError.classList.add('hidden');
+        availWindows.innerHTML = '<p class="text-xs text-gray-400">Chargement…</p>';
+        const resp = await fetch(`/api/admin/practitioners/${id}/availability?date=${date}`);
+        availWindows.innerHTML = '';
+        if (!resp.ok) return;
+        const json = await resp.json() as { data: { windows: { start_time: string; end_time: string }[] } };
+        const wins = json.data?.windows ?? [];
+        wins.forEach(w => addWindowRow(w.start_time, w.end_time));
+      }
+
+      availToggle.addEventListener('click', () => {
+        const wasHidden = availForm.classList.contains('hidden');
+        availForm.classList.toggle('hidden');
+        availArrow.style.transform = wasHidden ? 'rotate(90deg)' : '';
+        if (wasHidden) loadAvailability(availDate.value);
+      });
+
+      availDate.addEventListener('change', () => loadAvailability(availDate.value));
+      winAdd.addEventListener('click', () => addWindowRow());
+
+      availSave.addEventListener('click', async () => {
+        availResult.classList.add('hidden');
+        availError.classList.add('hidden');
+        const rows = availWindows.querySelectorAll('.window-row');
+        const windows = Array.from(rows).map(row => ({
+          start_time: (row.querySelector('.win-start') as HTMLInputElement).value,
+          end_time: (row.querySelector('.win-end') as HTMLInputElement).value,
+        }));
+        const resp = await fetch(`/api/admin/practitioners/${id}/availability`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ date: availDate.value, windows }),
+        });
+        const json = await resp.json() as { data?: { count: number }; error?: { message: string } };
+        if (resp.ok && json.data) {
+          availResult.textContent = `${json.data.count} créneau(x) généré(s).`;
+          availResult.classList.remove('hidden');
+        } else {
+          availError.textContent = json.error?.message ?? 'Erreur lors de la sauvegarde.';
+          availError.classList.remove('hidden');
+        }
+      });
+    });
+  </script>
+</AdminLayout>

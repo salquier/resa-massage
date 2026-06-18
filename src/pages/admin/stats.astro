@@ -1,0 +1,120 @@
+---
+import { env } from 'cloudflare:workers';
+import AdminLayout from '../../layouts/AdminLayout.astro';
+import { requireAdmin } from '../../lib/admin-auth';
+import { currentLocalDate, currentLocalHHMM } from '../../lib/time';
+
+const authError = await requireAdmin(Astro.request, env);
+if (authError) return Astro.redirect('/admin/login');
+
+const today = currentLocalDate();
+const currentHHMM = currentLocalHHMM();
+
+const [totalRow, completedRows, smsRows] = await Promise.all([
+  env.DB.prepare('SELECT COUNT(*) as count FROM bookings').first<{ count: number }>(),
+  env.DB.prepare(`
+    SELECT p.name as practitioner_name, COUNT(*) as count
+    FROM bookings b
+    JOIN slots s ON b.slot_id = s.id
+    JOIN practitioners p ON b.practitioner_id = p.id
+    WHERE s.day_date = ? AND s.start_time < ?
+    GROUP BY p.id
+    ORDER BY p.name ASC
+  `).bind(today, currentHHMM).all<{ practitioner_name: string; count: number }>(),
+  env.DB.prepare(
+    "SELECT type, COUNT(*) as count FROM sms_jobs WHERE status = 'sent' GROUP BY type"
+  ).all<{ type: string; count: number }>(),
+]);
+
+const totalBookings = totalRow?.count ?? 0;
+const completedByPractitioner = completedRows.results;
+const smsSent: Record<string, number> = { confirmation: 0, reminder: 0, practitioner_trigger: 0 };
+smsRows.results.forEach(r => { smsSent[r.type] = r.count; });
+---
+<AdminLayout title="Statistiques" active="stats">
+  <div class="max-w-2xl mx-auto px-4 py-6 space-y-5">
+
+    <!-- Key metric -->
+    <div class="bg-indigo-600 text-white rounded-xl p-5 shadow-sm">
+      <p class="text-sm font-medium text-indigo-200">Total réservations créées</p>
+      <p class="text-4xl font-bold mt-1">{totalBookings}</p>
+    </div>
+
+    <!-- Completed per practitioner -->
+    <section class="bg-white rounded-xl border border-gray-200 p-5 shadow-sm">
+      <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-4">Consultations terminées aujourd'hui</h2>
+      {completedByPractitioner.length === 0 ? (
+        <p class="text-sm text-gray-400">Aucune consultation terminée pour l'instant.</p>
+      ) : (
+        <div class="space-y-3">
+          {completedByPractitioner.map(row => (
+            <div class="flex items-center justify-between">
+              <span class="text-sm text-gray-700">{row.practitioner_name}</span>
+              <span class="text-sm font-bold text-indigo-600 bg-indigo-50 px-3 py-0.5 rounded-full">{row.count}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+
+    <!-- SMS stats -->
+    <section class="bg-white rounded-xl border border-gray-200 p-5 shadow-sm">
+      <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-4">SMS envoyés</h2>
+      <div class="grid grid-cols-3 gap-3">
+        <div class="bg-emerald-50 rounded-xl p-4 text-center">
+          <p class="text-2xl font-bold text-emerald-700">{smsSent.confirmation}</p>
+          <p class="text-xs text-emerald-600 mt-1 font-medium">Confirmations</p>
+        </div>
+        <div class="bg-blue-50 rounded-xl p-4 text-center">
+          <p class="text-2xl font-bold text-blue-700">{smsSent.reminder}</p>
+          <p class="text-xs text-blue-600 mt-1 font-medium">Rappels</p>
+        </div>
+        <div class="bg-violet-50 rounded-xl p-4 text-center">
+          <p class="text-2xl font-bold text-violet-700">{smsSent.practitioner_trigger}</p>
+          <p class="text-xs text-violet-600 mt-1 font-medium">Praticiens</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Data wipe -->
+    <section class="bg-white rounded-xl border border-red-200 p-5 shadow-sm">
+      <h2 class="text-sm font-semibold text-red-700 uppercase tracking-wide mb-2">Zone de danger</h2>
+      <p class="text-sm text-gray-600 mb-4">
+        Supprime irrémédiablement toutes les données de l'événement (praticien·nes, créneaux, réservations, SMS).
+        Cette action est <strong>irréversible</strong>.
+      </p>
+      <button
+        id="wipe-btn"
+        class="bg-red-600 text-white text-sm px-5 py-2.5 rounded-lg hover:bg-red-700 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        Effacer toutes les données
+      </button>
+      <p id="wipe-error" class="mt-2 text-sm text-red-600 hidden"></p>
+    </section>
+
+  </div>
+
+  <script>
+    const wipeBtn = document.getElementById('wipe-btn') as HTMLButtonElement | null;
+    const wipeError = document.getElementById('wipe-error');
+
+    wipeBtn?.addEventListener('click', async () => {
+      const confirmed = window.confirm(
+        'Attention : cette action supprime TOUTES les données de manière irréversible.\n\nConfirmer la suppression ?'
+      );
+      if (!confirmed) return;
+      if (!wipeBtn) return;
+      wipeBtn.disabled = true;
+      const resp = await fetch('/api/admin/wipe', { method: 'POST' });
+      if (resp.ok) {
+        window.location.replace('/admin/login');
+      } else {
+        if (wipeError) {
+          wipeError.textContent = 'Erreur lors de la suppression. Veuillez réessayer.';
+          wipeError.classList.remove('hidden');
+        }
+        wipeBtn.disabled = false;
+      }
+    });
+  </script>
+</AdminLayout>
