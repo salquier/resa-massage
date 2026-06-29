@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '26'
           cache: 'npm'
       - name: Install dependencies
         run: npm ci
@@ -55,6 +55,7 @@ jobs:
     needs: [ci, check-secrets]
     if: needs.check-secrets.outputs.secrets_ok == 'true'
     steps:
+      - uses: actions/checkout@v4
       - name: Download dist
         uses: actions/download-artifact@v4
         with:
@@ -64,7 +65,9 @@ jobs:
         run: echo "$WRANGLER_TOML" > wrangler.toml
         env:
           WRANGLER_TOML: ${{ secrets.WRANGLER_TOML }}
-      - name: Deploy to Cloudflare Workers
-        run: npx wrangler deploy
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      - name: Deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          wranglerVersion: '4.90.0'
+          command: deploy
